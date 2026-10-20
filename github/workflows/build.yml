@@ -1,43 +1,125 @@
-name: Android debug APK
+name: Build GoldenEye Touch APK
+
 on:
   push:
   workflow_dispatch:
+
 permissions:
   contents: read
-  actions: read
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Set up JDK 17
+
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-      - name: Fetch Mupen64Plus-Next GLES3 cores
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip zip curl findutils
+
+      - name: Extract project ZIP if present
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p app/src/main/jniLibs/arm64-v8a app/src/main/jniLibs/armeabi-v7a
-          curl -fL 'https://buildbot.libretro.com/nightly/android/latest/arm64-v8a/mupen64plus_next_gles3_libretro_android.so.zip' -o /tmp/core64.zip
-          curl -fL 'https://buildbot.libretro.com/nightly/android/latest/armeabi-v7a/mupen64plus_next_gles3_libretro_android.so.zip' -o /tmp/core32.zip
-          unzip -l /tmp/core64.zip
-          unzip -l /tmp/core32.zip
-          unzip -j -o /tmp/core64.zip '*.so' -d app/src/main/jniLibs/arm64-v8a
-          unzip -j -o /tmp/core32.zip '*.so' -d app/src/main/jniLibs/armeabi-v7a
-          test -n "$(find app/src/main/jniLibs/arm64-v8a -name '*.so' -print -quit)"
-          test -n "$(find app/src/main/jniLibs/armeabi-v7a -name '*.so' -print -quit)"
+
+          mkdir -p "$RUNNER_TEMP/project"
+
+          ZIP_FILE="$(find . -maxdepth 1 -type f \
+            -name 'GoldenEyeTouch_Project.zip' -print -quit)"
+
+          if [ -n "$ZIP_FILE" ]; then
+            unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/project"
+          else
+            cp -a . "$RUNNER_TEMP/project/"
+          fi
+
+          WRAPPER="$(find "$RUNNER_TEMP/project" \
+            -type f -name gradlew -print -quit)"
+
+          if [ -z "$WRAPPER" ]; then
+            echo "::error::gradlew not found. Upload the extracted Android project or GoldenEyeTouch_Project.zip to the repository root."
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$(dirname "$WRAPPER")" >> "$GITHUB_ENV"
+
+      - name: Validate Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          if [ ! -f settings.gradle ] && \
+             [ ! -f settings.gradle.kts ]; then
+            echo "::error::settings.gradle or settings.gradle.kts is missing."
+            exit 1
+          fi
+
+          if [ ! -f app/build.gradle ] && \
+             [ ! -f app/build.gradle.kts ]; then
+            echo "::error::Android app module build file is missing."
+            exit 1
+          fi
+
+          chmod +x gradlew
+
+      - name: Download Mupen64Plus-Next GLES3 cores
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          BASE="https://buildbot.libretro.com/nightly/android/latest"
+
+          for ABI in arm64-v8a armeabi-v7a; do
+            DIR="app/src/main/jniLibs/$ABI"
+            mkdir -p "$DIR"
+
+            URL="$BASE/$ABI/mupen64plus_next_gles3_libretro_android.so.zip"
+            TEMP_ZIP="$RUNNER_TEMP/mupen64-$ABI.zip"
+            TEMP_DIR="$RUNNER_TEMP/mupen64-$ABI"
+
+            echo "Downloading core for $ABI"
+            curl --fail --location --retry 3 \
+              "$URL" -o "$TEMP_ZIP"
+
+            mkdir -p "$TEMP_DIR"
+            unzip -oq "$TEMP_ZIP" -d "$TEMP_DIR"
+
+            CORE="$(find "$TEMP_DIR" -type f \
+              -name 'mupen64plus_next_gles3_libretro_android.so' \
+              -print -quit)"
+
+            if [ -z "$CORE" ]; then
+              echo "::error::Expected N64 core was not found in $ABI archive."
+              exit 1
+            fi
+
+            cp "$CORE" "$DIR/"
+            test -s "$DIR/mupen64plus_next_gles3_libretro_android.so"
+          done
+
       - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          ./gradlew --no-daemon assembleDebug
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: goldeneye-touch-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: GoldenEyeTouch-debug-apk
+          path: |
+            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 14
