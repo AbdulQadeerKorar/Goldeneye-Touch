@@ -1,10 +1,10 @@
-name: Build GoldenEye Touch
+name: Build GoldenEye Touch APK
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,64 +18,69 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK packages
         run: |
-          sdkmanager "platforms;android-34" \
-                     "build-tools;34.0.0" \
-                     "ndk;26.3.11579264"
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "ndk;26.3.11579264"
 
-      - name: Extract project ZIP
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Check project files
         run: |
-          ZIP_FILE="$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)"
-          if [ -n "$ZIP_FILE" ]; then
-            unzip -oq "$ZIP_FILE" -d extracted
-            if [ -f extracted/gradlew ]; then
-              cp -a extracted/. .
-            else
-              PROJECT_DIR="$(find extracted -type f -name gradlew -print -quit)"
-              if [ -z "$PROJECT_DIR" ]; then
-                echo "ERROR: No gradlew found in project ZIP"
-                exit 1
-              fi
-              PROJECT_DIR="${PROJECT_DIR%/gradlew}"
-              cp -a "$PROJECT_DIR"/. .
-            fi
+          echo "Repository files:"
+          ls -la
+
+          if [ ! -f "gradlew" ]; then
+            echo "ERROR: gradlew was not found in the repository root."
+            exit 1
           fi
 
-      - name: Verify project files
-        run: |
-          test -f settings.gradle || test -f settings.gradle.kts
-          test -f gradlew
-          chmod +x gradlew
+          if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
+            echo "ERROR: settings.gradle or settings.gradle.kts was not found."
+            exit 1
+          fi
 
-      - name: Download Mupen64Plus-Next cores
-        run: |
-          set -e
-          BASE="https://buildbot.libretro.com/nightly/android/latest"
-          mkdir -p app/src/main/jniLibs/arm64-v8a
-          mkdir -p app/src/main/jniLibs/armeabi-v7a
+          if [ ! -d "app" ]; then
+            echo "ERROR: app directory was not found."
+            exit 1
+          fi
 
-          curl -fL "$BASE/arm64-v8a/mupen64plus_next_libretro_android.so" \
-            -o app/src/main/jniLibs/arm64-v8a/libmupen64plus_next_libretro.so
-
-          curl -fL "$BASE/armeabi-v7a/mupen64plus_next_libretro_android.so" \
-            -o app/src/main/jniLibs/armeabi-v7a/libmupen64plus_next_libretro.so
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
 
       - name: Build debug APK
-        run: ./gradlew --no-daemon assembleDebug
+        run: ./gradlew --no-daemon --stacktrace assembleDebug
 
-      - name: Upload APK
+      - name: Verify APK output
+        run: |
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK_PATH" ]; then
+            echo "ERROR: APK was not generated."
+            find app/build/outputs -maxdepth 5 -type f 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "APK generated successfully:"
+          ls -lh "$APK_PATH"
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GoldenEyeTouch-debug-apk
+          name: GoldenEye-Touch-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 7
