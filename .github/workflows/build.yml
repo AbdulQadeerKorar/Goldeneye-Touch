@@ -1,0 +1,76 @@
+
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout build-kit repository
+        uses: actions/checkout@v4
+
+      - name: Checkout Nin64 emulator source
+        uses: actions/checkout@v4
+        with:
+          repository: izzy2lost/Nin64-Emulator
+          ref: main
+          path: upstream
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        shell: bash
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;30.0.14904198" "cmake;3.30.3"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/30.0.14904198" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/30.0.14904198" >> "$GITHUB_ENV"
+
+      - name: Patch app display label when possible
+        shell: bash
+        run: python3 scripts/patch_app_label.py upstream
+
+      - name: Build Mupen64Plus-Next native core
+        working-directory: upstream
+        shell: bash
+        run: bash scripts/build_mupen64plus_next_android.sh
+
+      - name: Build release APK
+        working-directory: upstream
+        shell: bash
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleRelease
+
+      - name: Collect APK files
+        shell: bash
+        run: |
+          mkdir -p dist
+          find upstream -type f -path '*/build/outputs/apk/*/*.apk' -exec cp {} dist/ \;
+          if ! find dist -maxdepth 1 -name '*.apk' -print -quit | grep -q .; then
+            echo "No APK found. Review the build logs above."
+            exit 1
+          fi
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: goldeneye-apk
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 14
