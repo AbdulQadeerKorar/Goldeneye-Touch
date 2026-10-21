@@ -1,0 +1,39 @@
+name: Build GoldenEye N64 APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unzip project
+        run: unzip -q GoldenEyeN64.zip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Fetch Mupen64Plus-Next core (arm64)
+        working-directory: GoldenEyeN64
+        run: |
+          BASE=https://buildbot.libretro.com/nightly/android/latest/arm64-v8a
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          for name in mupen64plus_next_gles3_libretro_android mupen64plus_next_libretro_android; do
+            if curl -fL -o core.zip "$BASE/$name.so.zip"; then
+              unzip -o core.zip -d tmp_core
+              mv "tmp_core/$name.so" app/src/main/jniLibs/arm64-v8a/libmupen64plus_next_gles3_libretro_android.so
+              echo "Using core: $name"
+              break
+            fi
+          done
+          test -f app/src/main/jniLibs/arm64-v8a/libmupen64plus_next_gles3_libretro_android.so
+      - name: Build
+        working-directory: GoldenEyeN64
+        run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GoldenEyeN64-apk
+          path: GoldenEyeN64/app/build/outputs/apk/debug/app-debug.apk
